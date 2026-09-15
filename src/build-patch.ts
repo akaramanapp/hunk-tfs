@@ -67,7 +67,9 @@ function myersDiff(a: string[], b: string[]): Array<{ type: "equal" | "insert" |
   let x = n;
   let y = m;
   for (let d = finalD; d > 0; d -= 1) {
-    const vPrev = trace[d - 1]!;
+    // Snapshot is taken at the *start* of depth d (before edits), i.e. V after d-1.
+    // Backtracking depth d must therefore read trace[d], not trace[d - 1].
+    const vPrev = trace[d]!;
     const k = x - y;
     let prevK: number;
     if (k === -d || (k !== d && vPrev[offset + k - 1]! < vPrev[offset + k + 1]!)) {
