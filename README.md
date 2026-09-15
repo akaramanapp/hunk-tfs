@@ -50,7 +50,7 @@ hunk pr-review '#94655'
 hunk pr-review 'MyProject/my-repo#94655'
 hunk pr-review 'http://host:8080/tfs/DefaultCollection/MyProject/_git/my-repo/pullrequest/94655?_a=files&path=%2FREADME.md'
 
-# Auto-discover and pass an option through to hunk patch
+# Auto-discover and pass an option through to the review UI
 hunk pr-review -- --pager
 
 # Indefinitely supported compatibility alias
@@ -61,8 +61,11 @@ hunk tfs
 Synopsis:
 
 ```text
-hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [-- <patch-options...>]
+hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [-- <review-options...>]
 ```
+
+When the command runs inside a Git work tree, the review session is bound to that
+repository root, so helpers like `hunk session review --repo .` resolve it.
 
 ### Auto-discovery
 
@@ -79,7 +82,7 @@ Supported remotes are HTTP(S) URLs shaped as `{collection}/{project}/_git/{repos
 
 ## How it works
 
-The extension loads PR metadata, changed blobs, and threads through the TFS REST API, builds a restrictive-permission temporary unified patch and agent-context sidecar, then delegates to Hunk's built-in `patch` command. Authentication redirects are refused and the PAT is never passed in process arguments.
+The extension loads PR metadata, changed blobs, and threads through the TFS REST API, builds a restrictive-permission temporary unified patch plus agent-context and session sidecars, then delegates to Hunk's built-in `show --vcs tfs` path so the session is bound to the local Git root (required for `--repo` session commands). Authentication redirects are refused and the PAT is never passed in process arguments.
 
 ## Development
 

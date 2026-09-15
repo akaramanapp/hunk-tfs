@@ -34,6 +34,13 @@ import {
   webPullRequestUrl,
   type TfsFetch,
 } from "./src/tfs-client.ts";
+import {
+  TFS_SESSION_MANIFEST_NAME,
+  TFS_VCS_ID,
+  buildSessionManifest,
+  createTfsVcsAdapter,
+  resolveGitRepoRoot,
+} from "./src/tfs-vcs.ts";
 import type { TfsConnection, TfsPullRequest, TfsPullRequestTarget } from "./src/types.ts";
 
 const MAX_PATCH_BYTES = 64 * 1024 * 1024;
@@ -343,16 +350,41 @@ export function createHunkTfsExtension(
         shortRef(pr.sourceRefName),
       );
 
+      // Bind the session to the Git work-tree root so `hunk session … --repo .` works.
+      // Patch-delegated reviews leave repoRoot unbound; VCS `show` + sourceLabel binds it.
+      const repoRoot =
+        (await resolveGitRepoRoot(ctx.cwd, ctx.signal, runtime.commandRunner)) ?? ctx.cwd;
+      const manifest = buildSessionManifest({
+        title: pr.title,
+        patchPath,
+        repoRoot,
+        review,
+      });
+      const manifestPath = join(directory, TFS_SESSION_MANIFEST_NAME);
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+        flag: "wx",
+        mode: 0o600,
+      });
+
       const patchBytes = new TextEncoder().encode(built.text).byteLength;
       const noteCount = agentContext.files.reduce((sum, file) => sum + file.annotations.length, 0);
       await ctx.stderr.write(
         `Opening ${patchBytes.toLocaleString()} bytes with ${noteCount} agent note${noteCount === 1 ? "" : "s"}…\n`,
       );
 
+      // Review metadata must come from the VCS result (not the delegate): Hunk only
+      // allows ExtensionCliDelegateResult.review on `patch`, which never binds repoRoot.
       return {
         kind: "delegate",
-        argv: ["patch", patchPath, "--agent-context", agentContextPath, ...invocation.patchArgs],
-        review,
+        argv: [
+          "show",
+          manifestPath,
+          "--vcs",
+          TFS_VCS_ID,
+          "--agent-context",
+          agentContextPath,
+          ...invocation.patchArgs,
+        ],
       };
     };
 
@@ -372,6 +404,8 @@ export function createHunkTfsExtension(
       },
       handler,
     );
+
+    hunk.registerVcsAdapter(createTfsVcsAdapter());
 
     hunk.registerPane({
       id: "comments",

@@ -1,6 +1,6 @@
 import { HunkExtensionUserError } from "hunkdiff/extension";
 
-export const TFS_PR_HELP = `Usage: hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [-- <patch-options...>]
+export const TFS_PR_HELP = `Usage: hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [-- <review-options...>]
 
 hunk-tfs — review an Azure DevOps Server / TFS Git pull request.
 
@@ -137,7 +137,7 @@ export function parseTfsPullRequestLocator(value: string): TfsPullRequestLocator
   return { id, project, repository, collectionUrl };
 }
 
-/** Parse extension-owned tokens; options after `--` pass through to `hunk patch`. */
+/** Parse extension-owned tokens; options after `--` pass through to the review command. */
 export function parseTfsPrInvocation(args: readonly string[]): TfsPrInvocation {
   const separator = args.indexOf("--");
   const ownedArgs = separator < 0 ? args : args.slice(0, separator);

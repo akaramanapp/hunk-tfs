@@ -1,6 +1,6 @@
 {
   "name": "hunk-tfs",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "hunk-tfs — review Azure DevOps Server / TFS pull requests in Hunk",
   "hunk": {
