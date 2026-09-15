@@ -13,10 +13,18 @@ import { parseTfsPrInvocation, TFS_PR_HELP } from "./src/cli.ts";
 import { buildUnifiedPatch } from "./src/build-patch.ts";
 import { buildAgentContextFromThreads } from "./src/agent-context.ts";
 import { CommentsPane } from "./src/comments-pane.tsx";
+import {
+  defaultDiscoveryRuntime,
+  discoverGitRepository,
+  selectPullRequest,
+  type CommandRunner,
+} from "./src/discovery.ts";
 import { loadTfsDotEnv } from "./src/load-env.ts";
 import { clearThreads, setThreads, threadsForPath } from "./src/threads-store.ts";
 import {
+  fetchActivePullRequests,
   fetchItemText,
+  fetchPullRequest,
   fetchPullRequestById,
   fetchPullRequestChanges,
   fetchPullRequestThreads,
@@ -26,7 +34,7 @@ import {
   webPullRequestUrl,
   type TfsFetch,
 } from "./src/tfs-client.ts";
-import type { TfsConnection, TfsPullRequestTarget } from "./src/types.ts";
+import type { TfsConnection, TfsPullRequest, TfsPullRequestTarget } from "./src/types.ts";
 
 const MAX_PATCH_BYTES = 64 * 1024 * 1024;
 
@@ -34,6 +42,9 @@ export interface TfsPrExtensionRuntime {
   fetchImpl: TfsFetch;
   env: NodeJS.ProcessEnv;
   temporaryRoot: string;
+  commandRunner: CommandRunner;
+  interactive: boolean;
+  prompt: (question: string) => Promise<string>;
 }
 
 function toReviewDescriptor(
@@ -97,10 +108,14 @@ async function writeTemporaryPatch(
 export function createHunkTfsExtension(
   overrides: Partial<TfsPrExtensionRuntime> = {},
 ): ExtensionFactory {
+  const discoveryDefaults = defaultDiscoveryRuntime();
   const runtime: TfsPrExtensionRuntime = {
     fetchImpl: overrides.fetchImpl ?? fetch,
     env: overrides.env ?? process.env,
     temporaryRoot: overrides.temporaryRoot ?? tmpdir(),
+    commandRunner: overrides.commandRunner ?? discoveryDefaults.run,
+    interactive: overrides.interactive ?? discoveryDefaults.interactive,
+    prompt: overrides.prompt ?? discoveryDefaults.prompt,
   };
   const retainedDirectories = new Set<string>();
   let activeRegistries = 0;
@@ -119,47 +134,114 @@ export function createHunkTfsExtension(
       const env: NodeJS.ProcessEnv = { ...runtime.env };
       loadTfsDotEnv(env, ctx.cwd);
 
-      const hintedProject = invocation.project ?? invocation.locator.project;
-      const hintedRepository = invocation.repository ?? invocation.locator.repository;
-      const base = resolveConnection(env, {
-        project: hintedProject,
-        repository: hintedRepository,
-        url: invocation.locator.collectionUrl,
-      });
+      let connection: TfsConnection;
+      let target: TfsPullRequestTarget;
+      let pr: TfsPullRequest;
 
-      await ctx.stderr.write(`Looking up TFS pull request #${invocation.locator.id}…\n`);
-      const pr = await fetchPullRequestById(
-        base,
-        invocation.locator.id,
-        ctx.signal,
-        runtime.fetchImpl,
-      );
+      if (invocation.locator) {
+        const locator = invocation.locator;
+        const hintedProject = invocation.project ?? locator.project;
+        const hintedRepository = invocation.repository ?? locator.repository;
+        const base = resolveConnection(env, {
+          project: hintedProject,
+          repository: hintedRepository,
+          url: locator.collectionUrl,
+        });
+        if (new URL(base.url).protocol === "http:") {
+          await ctx.stderr.write(
+            "Warning: this TFS server uses HTTP; TFS_PAT and review data will be sent without transport encryption.\n",
+          );
+        }
 
-      if (hintedProject && hintedProject !== pr.project) {
-        throw new HunkExtensionUserError(
-          `PR #${invocation.locator.id} belongs to project "${pr.project}", not "${hintedProject}".`,
+        await ctx.stderr.write(`Looking up TFS pull request #${locator.id}…\n`);
+        const resolved = await fetchPullRequestById(
+          base,
+          locator.id,
+          ctx.signal,
+          runtime.fetchImpl,
         );
-      }
-      if (hintedRepository && hintedRepository !== pr.repository) {
-        throw new HunkExtensionUserError(
-          `PR #${invocation.locator.id} belongs to repository "${pr.repository}", not "${hintedRepository}".`,
+        if (hintedProject && hintedProject !== resolved.project) {
+          throw new HunkExtensionUserError(
+            `PR #${locator.id} belongs to project "${resolved.project}", not "${hintedProject}".`,
+          );
+        }
+        if (hintedRepository && hintedRepository !== resolved.repository) {
+          throw new HunkExtensionUserError(
+            `PR #${locator.id} belongs to repository "${resolved.repository}", not "${hintedRepository}".`,
+          );
+        }
+        connection = { ...base, project: resolved.project, repository: resolved.repository };
+        target = { project: resolved.project, repository: resolved.repository, id: locator.id };
+        pr = resolved;
+      } else {
+        const discovered = await discoverGitRepository(
+          ctx.cwd,
+          ctx.signal,
+          {
+            run: runtime.commandRunner,
+            interactive: runtime.interactive,
+            prompt: runtime.prompt,
+          },
+          (text) => ctx.stderr.write(text),
         );
+        const repository = discovered.repository;
+        if (invocation.project && invocation.project !== repository.project) {
+          throw new HunkExtensionUserError(
+            `Selected remote belongs to project "${repository.project}", not "${invocation.project}".`,
+          );
+        }
+        if (invocation.repository && invocation.repository !== repository.repository) {
+          throw new HunkExtensionUserError(
+            `Selected remote belongs to repository "${repository.repository}", not "${invocation.repository}".`,
+          );
+        }
+        connection = resolveConnection(env, {
+          url: repository.collectionUrl,
+          project: repository.project,
+          repository: repository.repository,
+        });
+        if (new URL(connection.url).protocol === "http:") {
+          await ctx.stderr.write(
+            "Warning: this TFS server uses HTTP; TFS_PAT and review data will be sent without transport encryption.\n",
+          );
+        }
+        await ctx.stderr.write(
+          `Finding active pull requests for ${repository.project}/${repository.repository}…\n`,
+        );
+        const active = await fetchActivePullRequests(
+          connection,
+          repository.project,
+          repository.repository,
+          ctx.signal,
+          runtime.fetchImpl,
+        );
+        if (active.length === 0) {
+          throw new HunkExtensionUserError(
+            `No active pull requests exist for repository "${repository.repository}".`,
+            { suggestions: ["Create an active PR, or supply an explicit PR locator."] },
+          );
+        }
+        const selected = await selectPullRequest(
+          active,
+          discovered.sourceBranch,
+          ctx.cwd,
+          ctx.signal,
+          {
+            run: runtime.commandRunner,
+            interactive: runtime.interactive,
+            prompt: runtime.prompt,
+          },
+          (text) => ctx.stderr.write(text),
+        );
+        target = {
+          project: repository.project,
+          repository: repository.repository,
+          id: String(selected.pullRequestId),
+        };
+        pr = await fetchPullRequest(connection, target, ctx.signal, runtime.fetchImpl);
       }
 
-      const connection: TfsConnection = {
-        ...base,
-        project: pr.project,
-        repository: pr.repository,
-      };
-      const target: TfsPullRequestTarget = {
-        project: pr.project,
-        repository: pr.repository,
-        id: invocation.locator.id,
-      };
-
-      await ctx.stderr.write(
-        `Resolved ${target.project}/${target.repository}#${target.id}…\n`,
-      );
+      await ctx.stderr.write(`Resolved ${target.project}/${target.repository}#${target.id}…\n`);
 
       const baseCommit = pr.lastMergeTargetCommit?.commitId;
       const headCommit = pr.lastMergeSourceCommit?.commitId;
@@ -276,9 +358,17 @@ export function createHunkTfsExtension(
 
     hunk.registerCliCommand(
       {
-        name: "tfs",
+        name: "pr-review",
         summary: "Review a TFS / Azure DevOps Server pull request (hunk-tfs)",
-        usage: "<url|project/repo#id|id> [--project <name>] [--repo <name>]",
+        usage: "[url|project/repo#id|id] [--project <name>] [--repo <name>]",
+      },
+      handler,
+    );
+    hunk.registerCliCommand(
+      {
+        name: "tfs",
+        summary: "Compatibility alias for `hunk pr-review`",
+        usage: "[url|project/repo#id|id] [--project <name>] [--repo <name>]",
       },
       handler,
     );

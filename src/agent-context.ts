@@ -1,5 +1,5 @@
 import type { AgentAnnotation, AgentFileContext } from "hunkdiff/extension";
-import type { TfsReviewThread } from "./types.ts";
+import type { TfsReviewThread, TfsThreadComment } from "./types.ts";
 
 /** Top-level sidecar shape accepted by `hunk patch --agent-context`. */
 export interface AgentContextDocument {
@@ -12,46 +12,32 @@ function normalizePath(path: string): string {
   return path.replace(/^\/+/, "");
 }
 
-function threadSummary(thread: TfsReviewThread): string {
-  const first = thread.comments[0];
-  if (!first) return `Thread #${thread.id}`;
-  const oneLine = first.content.replace(/\s+/g, " ").trim();
-  return oneLine.length > 120 ? `${oneLine.slice(0, 117)}...` : oneLine;
-}
-
-function threadRationale(thread: TfsReviewThread): string {
-  return thread.comments
-    .map((comment, index) => {
-      const header = index === 0 ? comment.author : `${comment.author} (reply)`;
-      return `${header}:\n${comment.content.trim()}`;
-    })
-    .join("\n\n");
-}
-
-function annotationForThread(thread: TfsReviewThread): AgentAnnotation | null {
+function annotationForComment(
+  thread: TfsReviewThread,
+  comment: TfsThreadComment,
+): AgentAnnotation | null {
   const position = thread.position;
   if (!position) return null;
-
-  const first = thread.comments[0];
   const start = position.line;
   const end = position.endLine && position.endLine >= start ? position.endLine : start;
   const range: [number, number] = [start, end];
+  const status = thread.status.trim().toLowerCase() || "unknown";
 
   return {
-    id: `tfs-thread-${thread.id}`,
+    id: `tfs-thread-${thread.id}-comment-${comment.id}`,
     ...(position.side === "old" ? { oldRange: range } : { newRange: range }),
-    summary: threadSummary(thread),
-    rationale: threadRationale(thread),
-    author: first?.author ?? "TFS",
+    summary: comment.content,
+    rationale: `threadId: ${thread.id} (${status})`,
+    author: comment.author,
     source: "agent",
-    title: `TFS · ${thread.status}`,
-    createdAt: first?.publishedDate,
+    title: `TFS · ${status}`,
+    createdAt: comment.publishedDate,
     editable: false,
-    tags: ["tfs", thread.status],
+    tags: ["tfs", status],
   };
 }
 
-/** Convert file-anchored TFS threads into a Hunk agent-context document. */
+/** Convert each comment in each file-anchored TFS thread into a Hunk annotation. */
 export function buildAgentContextFromThreads(
   pullRequestId: string,
   threads: readonly TfsReviewThread[],
@@ -59,12 +45,14 @@ export function buildAgentContextFromThreads(
   const byPath = new Map<string, AgentAnnotation[]>();
 
   for (const thread of threads) {
-    const annotation = annotationForThread(thread);
-    if (!annotation || !thread.position) continue;
+    if (!thread.position) continue;
     const path = normalizePath(thread.position.filePath);
     const list = byPath.get(path) ?? [];
-    list.push(annotation);
-    byPath.set(path, list);
+    for (const comment of thread.comments) {
+      const annotation = annotationForComment(thread, comment);
+      if (annotation) list.push(annotation);
+    }
+    if (list.length > 0) byPath.set(path, list);
   }
 
   const files: AgentFileContext[] = [...byPath.entries()]
@@ -76,7 +64,7 @@ export function buildAgentContextFromThreads(
     }));
 
   const anchored = files.reduce((sum, file) => sum + file.annotations.length, 0);
-  const general = threads.length - anchored;
+  const general = threads.filter((thread) => !thread.position).length;
 
   return {
     version: 1,
