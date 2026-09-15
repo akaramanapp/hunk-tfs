@@ -5,7 +5,7 @@ Review **Azure DevOps Server / TFS** Git pull requests inside [Hunk](https://hun
 ## Requirements
 
 - [Hunk](https://hunk.dev) ≥ 0.22 (extension API ≥ 17)
-- `TFS_PAT`: Personal Access Token with **Code (Read)** scope
+- `TFS_PAT`: Personal Access Token with the minimal permissions listed below
 
 ## Install
 
@@ -24,6 +24,15 @@ TFS_PAT=your-personal-access-token
 TFS_URL=http://host:8080/tfs/DefaultCollection
 # TFS_API_VERSION=6.0
 ```
+
+### Create the PAT
+
+In Azure DevOps/TFS, open your user security settings, create a Personal Access Token, select the appropriate organization/collection, and grant only:
+
+- **Code: Read**
+- **Pull Request Threads: Read & write**
+
+Copy the token when it is shown and store it as `TFS_PAT`; Azure DevOps will not display it again. Although the extension currently reads reviews, the Pull Request Threads API exposes this permission as **Read & write**.
 
 `TFS_PAT` is always required. `TFS_URL` is required for an explicit bare ID or shorthand, but not for a full URL or auto-discovery. Auto-discovery always derives the collection, project, and repository from the selected Git remote and ignores `TFS_URL` for repository identity. Plain HTTP is allowed, but emits a warning because the PAT and review data are sent without transport encryption.
 
