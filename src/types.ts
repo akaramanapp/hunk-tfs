@@ -25,6 +25,7 @@ export interface TfsPullRequest {
   readonly title: string;
   readonly status: string;
   readonly isDraft?: boolean;
+  readonly creationDate?: string;
   readonly createdBy?: { readonly displayName?: string; readonly uniqueName?: string };
   readonly sourceRefName?: string;
   readonly targetRefName?: string;

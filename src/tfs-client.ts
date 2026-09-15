@@ -26,7 +26,7 @@ function userError(message: string, suggestions?: string[]): HunkExtensionUserEr
   return new HunkExtensionUserError(message, {
     suggestions: suggestions ?? [
       "Set TFS_PAT (and TFS_URL unless you pass a full PR URL).",
-      "Run `hunk tfs --help` for accepted forms.",
+      "Run `hunk pr-review --help` for accepted forms. (`hunk tfs` is an alias.)",
     ],
   });
 }
@@ -45,6 +45,9 @@ export function normalizeCollectionUrl(raw: string): string {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw userError("TFS_URL must be an http(s) URL.");
+  }
+  if (parsed.username || parsed.password) {
+    throw userError("TFS_URL must not embed credentials.");
   }
   return trimmed;
 }
@@ -119,7 +122,7 @@ function tfsHeaders(connection: TfsConnection, accept = "application/json"): Hea
 }
 
 function encodePathSegment(value: string): string {
-  return encodeURIComponent(value).replace(/%2F/gi, "/");
+  return encodeURIComponent(value);
 }
 
 function apiUrl(
@@ -312,6 +315,7 @@ export function parsePullRequest(value: unknown): TfsPullRequest {
     title: title.trim(),
     status: status.trim(),
     isDraft: typeof candidate.isDraft === "boolean" ? candidate.isDraft : undefined,
+    creationDate: readString(candidate, "creationDate"),
     createdBy,
     sourceRefName: readString(candidate, "sourceRefName"),
     targetRefName: readString(candidate, "targetRefName"),
@@ -359,6 +363,36 @@ export async function fetchPullRequestById(
     ]);
   }
   return { ...pr, project: pr.project, repository: pr.repository };
+}
+
+/** Fetch active PRs scoped to one repository, including drafts. */
+export async function fetchActivePullRequests(
+  connection: TfsConnection,
+  project: string,
+  repository: string,
+  signal: AbortSignal,
+  fetchImpl: TfsFetch = fetch,
+): Promise<TfsPullRequest[]> {
+  const target: TfsPullRequestTarget = { project, repository, id: "active" };
+  const url = apiUrl(connection, project, repository, "/pullRequests", {
+    "searchCriteria.status": "active",
+  });
+  const json = await tfsGetJson(
+    connection,
+    url,
+    signal,
+    target,
+    MAX_METADATA_BYTES,
+    "active pull requests",
+    fetchImpl,
+  );
+  const body = asRecord(json, "active pull requests");
+  if (!Array.isArray(body.value)) {
+    throw userError("TFS returned malformed active pull-request data.");
+  }
+  return body.value
+    .map(parsePullRequest)
+    .filter((pr) => pr.status.trim().toLowerCase() === "active");
 }
 
 export async function fetchPullRequest(
@@ -589,8 +623,8 @@ export function parseThreads(value: unknown): TfsReviewThread[] {
       const comment = commentRaw as Record<string, unknown>;
       if (comment.isDeleted === true) continue;
       if (isSystemCommentType(comment.commentType)) continue;
-      const content = readString(comment, "content")?.trim();
-      if (!content) continue;
+      const content = readString(comment, "content");
+      if (!content || !content.trim()) continue;
       const commentId = comment.id;
       if (typeof commentId !== "number") continue;
       let author = "unknown";
@@ -613,7 +647,7 @@ export function parseThreads(value: unknown): TfsReviewThread[] {
 
     threads.push({
       id,
-      status: (readString(thread, "status") ?? "unknown").toLowerCase(),
+      status: (readString(thread, "status") ?? "unknown").trim().toLowerCase() || "unknown",
       position: parseThreadPosition(thread.threadContext),
       comments,
     });

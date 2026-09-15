@@ -1,13 +1,11 @@
 # hunk-tfs
 
-Review **Azure DevOps Server / TFS** (and Azure DevOps) Git pull requests inside [Hunk](https://hunk.dev).
-
-Fetches the PR diff and discussion threads, opens them in Hunk, shows inline review comments as agent notes, and lists threads in a side pane.
+Review **Azure DevOps Server / TFS** Git pull requests inside [Hunk](https://hunk.dev). It opens the PR diff, maps every positioned TFS comment to a separate read-only Hunk annotation, and keeps full threads (including unpositioned threads) in a comments pane.
 
 ## Requirements
 
 - [Hunk](https://hunk.dev) ≥ 0.22 (extension API ≥ 17)
-- A Personal Access Token with **Code (Read)** scope
+- `TFS_PAT`: Personal Access Token with the minimal permissions listed below
 
 ## Install
 
@@ -15,114 +13,78 @@ Fetches the PR diff and discussion threads, opens them in Hunk, shows inline rev
 hunk extension install akaramanapp/hunk-tfs
 ```
 
-Pin a release:
-
-```bash
-hunk extension install akaramanapp/hunk-tfs@v0.1.0
-```
-
-One-off run without installing:
-
-```bash
-hunk --extension /path/to/hunk-tfs tfs 123
-```
+For a one-off run: `hunk --extension /path/to/hunk-tfs pr-review 123`.
 
 ## Configure
 
-Credentials are read in this order (first non-empty wins):
-
-1. **Shell environment** (`export TFS_PAT=…`)
-2. **Extension directory** `.env` (recommended for `hunk extension install`)
-3. **Current working directory** `.env`
-
-### Recommended (installed extension)
-
-After `hunk extension install akaramanapp/hunk-tfs`, put secrets next to the installed package — **not** in the git repo:
-
-```bash
-# typical managed install path (XDG)
-~/.config/hunk/extensions/installed/hunk-tfs/.env
-```
+Environment values are loaded without overriding existing shell values, first from the extension's `.env`, then from `<cwd>/.env`.
 
 ```env
-TFS_URL=http://host:8080/tfs/DefaultCollection
 TFS_PAT=your-personal-access-token
+TFS_URL=http://host:8080/tfs/DefaultCollection
 # TFS_API_VERSION=6.0
 ```
 
-Copy from the shipped example:
+### Create the PAT
 
-```bash
-cp ~/.config/hunk/extensions/installed/hunk-tfs/.env.example \
-   ~/.config/hunk/extensions/installed/hunk-tfs/.env
-```
+In Azure DevOps/TFS, open your user security settings, create a Personal Access Token, select the appropriate organization/collection, and grant only:
 
-Then edit `.env`. Never commit real PATs.
+- **Code: Read**
+- **Pull Request Threads: Read & write**
 
-### Alternatives
+Copy the token when it is shown and store it as `TFS_PAT`; Azure DevOps will not display it again. Although the extension currently reads reviews, the Pull Request Threads API exposes this permission as **Read & write**.
 
-| Approach | When to use |
-| -------- | ----------- |
-| Shell `export` / direnv / 1Password CLI | Shared machines, CI, or you don’t want files on disk |
-| `cwd/.env` | Per-project override while you `cd` into a repo |
-| Full PR URL only | `TFS_URL` can be omitted; `TFS_PAT` is still required |
+`TFS_PAT` is always required. `TFS_URL` is required for an explicit bare ID or shorthand, but not for a full URL or auto-discovery. Auto-discovery always derives the collection, project, and repository from the selected Git remote and ignores `TFS_URL` for repository identity. Plain HTTP is allowed, but emits a warning because the PAT and review data are sent without transport encryption.
 
-| Variable | Required | Description |
-| -------- | -------- | ----------- |
-| `TFS_PAT` | yes | PAT (Code Read) |
-| `TFS_URL` | usually | Collection / org URL. Optional if you pass a full PR URL |
-| `TFS_API_VERSION` | no | Defaults to `6.0` (good for on-prem Server) |
-
-Project and repository are resolved automatically:
-
-```http
-GET {TFS_URL}/_apis/git/pullrequests/{id}
-```
+A typical installed-extension secret file is `~/.config/hunk/extensions/installed/hunk-tfs/.env`. Never commit PATs.
 
 ## Usage
 
 ```bash
-# Bare id (needs TFS_URL + TFS_PAT)
+# Auto-discover from the current Git repository
+hunk pr-review
+
+# Explicit locators
+hunk pr-review 94655
+hunk pr-review '#94655'
+hunk pr-review 'MyProject/my-repo#94655'
+hunk pr-review 'http://host:8080/tfs/DefaultCollection/MyProject/_git/my-repo/pullrequest/94655?_a=files&path=%2FREADME.md'
+
+# Auto-discover and pass an option through to hunk patch
+hunk pr-review -- --pager
+
+# Indefinitely supported compatibility alias
 hunk tfs 94655
-
-# Full PR URL (collection taken from the link)
-hunk tfs 'http://host:8080/tfs/DefaultCollection/MyProject/_git/my-repo/pullrequest/94655'
-
-# Shorthand
-hunk tfs 'MyProject/my-repo#94655'
-
-# Pass options through to hunk patch
-hunk tfs 94655 -- --pager
+hunk tfs
 ```
 
-Help:
+Synopsis:
 
-```bash
-hunk tfs --help
+```text
+hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [-- <patch-options...>]
 ```
 
-### In the review UI
+### Auto-discovery
 
-- **Diff** — unified patch built from the PR’s base/head commits
-- **Agent notes** — file-anchored PR comments (author, body, status)
-- **hunk-tfs pane** (right) — all threads; `j`/`k` move, Enter jumps to the line
-- **`ctrl+shift+c`** — toggle the comments pane
+The command must run inside a Git work tree. It chooses the current branch's upstream remote, then `origin`, then the sole configured remote; otherwise it asks with `gum choose` or a numbered terminal prompt. Non-interactive ambiguity exits and lists choices.
+
+Supported remotes are HTTP(S) URLs shaped as `{collection}/{project}/_git/{repository}`; SSH remotes and embedded passwords are rejected. The extension fetches active repository PRs, including drafts, and prefers PRs whose source matches the current upstream branch (or local branch). With no match or detached HEAD it considers all active PRs. One candidate is automatic; multiple candidates use the same chooser, newest first.
+
+### Review UI
+
+- Every non-system, non-deleted positioned comment is stacked as its own annotation at the thread range.
+- The **hunk-tfs** pane shows complete threads; `j`/`k` move and Enter jumps to a positioned thread.
+- `ctrl+shift+c` toggles the comments pane.
+- Unpositioned threads remain in the pane and do not create artificial annotations.
 
 ## How it works
 
-1. Looks up the PR (metadata, project, repo)
-2. Lists changed files and fetches old/new blob contents
-3. Builds a temporary unified patch + `--agent-context` sidecar
-4. Delegates to Hunk’s built-in `patch` command
+The extension loads PR metadata, changed blobs, and threads through the TFS REST API, builds a restrictive-permission temporary unified patch and agent-context sidecar, then delegates to Hunk's built-in `patch` command. Authentication redirects are refused and the PAT is never passed in process arguments.
 
 ## Development
 
 ```bash
 npm install
 npx tsc --noEmit
-hunk --extension . tfs --help
+hunk --extension . pr-review --help
 ```
-
-## License
-
-Use and distribute as you like within your organization. Add a `LICENSE` file if you publish publicly.

@@ -1,12 +1,18 @@
 import { HunkExtensionUserError } from "hunkdiff/extension";
 
-export const TFS_PR_HELP = `Usage: hunk tfs <url|project/repo#id|id> [--project] [--repo] [-- <patch-options...>]
+export const TFS_PR_HELP = `Usage: hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [-- <patch-options...>]
 
 hunk-tfs — review an Azure DevOps Server / TFS Git pull request.
 
+With no locator, the current Git repository's upstream remote, origin, or sole
+remote is used to find active PRs. Current-branch PRs are preferred. Ambiguous
+remotes and PRs are selected with gum or a numbered terminal prompt.
+HTTP(S) remotes must look like {collection}/{project}/_git/{repository}.
+hunk tfs is a compatibility alias with identical behavior.
+
 Required environment (shell export or .env file):
   TFS_PAT       Personal Access Token (Code Read)
-  TFS_URL       Collection URL — optional when you pass a full PR URL
+  TFS_URL       Collection URL — optional for a full PR URL or auto-discovery
 
 Optional:
   TFS_API_VERSION   REST api-version (default: 6.0)
@@ -25,9 +31,12 @@ Pull request forms:
   'Project/repo#123'                                      optional hint; verified against the API
 
 Examples:
+  hunk pr-review
+  hunk pr-review 94655
+  hunk pr-review 'http://host:8080/tfs/DefaultCollection/MyProject/_git/my-repo/pullrequest/94655?_a=files'
+  hunk pr-review 'MyProject/my-repo#94655'
+  hunk pr-review -- --pager
   hunk tfs 94655
-  hunk tfs 'http://host:8080/tfs/DefaultCollection/MyProject/_git/my-repo/pullrequest/94655'
-  hunk tfs 'MyProject/my-repo#94655'
 `;
 
 export interface TfsPullRequestLocator {
@@ -39,7 +48,7 @@ export interface TfsPullRequestLocator {
 }
 
 export interface TfsPrInvocation {
-  readonly locator: TfsPullRequestLocator;
+  readonly locator?: TfsPullRequestLocator;
   readonly project?: string;
   readonly repository?: string;
   readonly patchArgs: readonly string[];
@@ -49,8 +58,8 @@ export interface TfsPrInvocation {
 function invocationError(message: string): HunkExtensionUserError {
   return new HunkExtensionUserError(message, {
     suggestions: [
-      "Run `hunk tfs --help` for accepted forms.",
-      "With TFS_URL + TFS_PAT set, a bare id is enough: hunk tfs 94655",
+      "Run `hunk pr-review --help` for accepted forms.",
+      "With TFS_URL + TFS_PAT set, a bare id is enough: hunk pr-review 94655",
       "Or pass a full PR URL.",
     ],
   });
@@ -123,10 +132,7 @@ export function parseTfsPullRequestLocator(value: string): TfsPullRequestLocator
   }
   const id = parsePullRequestId(parts[gitIndex + 3]!);
   const collectionParts = parts.slice(0, gitIndex - 1);
-  if (collectionParts.length === 0) {
-    throw invocationError("Could not derive the collection URL from the PR link.");
-  }
-  const collectionUrl = `${url.origin}/${collectionParts.join("/")}`;
+  const collectionUrl = `${url.origin}${collectionParts.length > 0 ? `/${collectionParts.join("/")}` : ""}`;
 
   return { id, project, repository, collectionUrl };
 }
@@ -139,7 +145,6 @@ export function parseTfsPrInvocation(args: readonly string[]): TfsPrInvocation {
 
   if (ownedArgs.includes("--help") || ownedArgs.includes("-h")) {
     return {
-      locator: { id: "1" },
       patchArgs: Object.freeze([...patchArgs]),
       help: true,
     };
@@ -177,7 +182,7 @@ export function parseTfsPrInvocation(args: readonly string[]): TfsPrInvocation {
       continue;
     }
     if (token.startsWith("-")) {
-      throw invocationError(`Unknown tfs option: ${token}`);
+      throw invocationError(`Unknown pr-review option: ${token}`);
     }
     if (target !== undefined) {
       throw invocationError("Specify exactly one pull request.");
@@ -185,15 +190,11 @@ export function parseTfsPrInvocation(args: readonly string[]): TfsPrInvocation {
     target = token;
   }
 
-  if (!target) {
-    throw invocationError("Specify one pull request (URL, project/repo#id, or id).");
-  }
-
-  const locator = parseTfsPullRequestLocator(target);
-  if (project !== undefined && locator.project && project !== locator.project) {
+  const locator = target ? parseTfsPullRequestLocator(target) : undefined;
+  if (project !== undefined && locator?.project && project !== locator.project) {
     throw invocationError("Do not combine --project with a locator that already names a project.");
   }
-  if (repository !== undefined && locator.repository && repository !== locator.repository) {
+  if (repository !== undefined && locator?.repository && repository !== locator.repository) {
     throw invocationError("Do not combine --repo with a locator that already names a repository.");
   }
 
