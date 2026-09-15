@@ -1,0 +1,19 @@
+{
+  "name": "hunk-tfs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "hunk-tfs — review Azure DevOps Server / TFS pull requests in Hunk",
+  "hunk": {
+    "extensions": ["./index.ts"],
+    "apiVersion": 17
+  },
+  "devDependencies": {
+    "@opentui/core": "^0.5.11",
+    "@opentui/react": "^0.5.11",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "hunkdiff": "^0.22.0",
+    "react": "^19.1.0",
+    "typescript": "^5.9.0"
+  }
+}
