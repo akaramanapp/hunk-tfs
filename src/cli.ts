@@ -1,6 +1,6 @@
 import { HunkExtensionUserError } from "hunkdiff/extension";
 
-export const TFS_PR_HELP = `Usage: hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [-- <review-options...>]
+export const TFS_PR_HELP = `Usage: hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [--all-comments] [-- <review-options...>]
 
 hunk-tfs — review an Azure DevOps Server / TFS Git pull request.
 
@@ -14,8 +14,9 @@ Required environment (shell export or .env file):
   TFS_PAT       Personal Access Token (Code Read)
   TFS_URL       Collection URL — optional for a full PR URL or auto-discovery
 
-Optional:
-  TFS_API_VERSION   REST api-version (default: 6.0)
+Options:
+  --all-comments        Include non-active comment threads
+  TFS_API_VERSION       REST api-version (default: 6.0)
 
 Project and repository are resolved automatically via:
   GET {collection}/_apis/git/pullrequests/{id}
@@ -52,6 +53,7 @@ export interface TfsPrInvocation {
   readonly project?: string;
   readonly repository?: string;
   readonly patchArgs: readonly string[];
+  readonly includeAllComments: boolean;
   readonly help: boolean;
 }
 
@@ -146,6 +148,7 @@ export function parseTfsPrInvocation(args: readonly string[]): TfsPrInvocation {
   if (ownedArgs.includes("--help") || ownedArgs.includes("-h")) {
     return {
       patchArgs: Object.freeze([...patchArgs]),
+      includeAllComments: false,
       help: true,
     };
   }
@@ -153,6 +156,7 @@ export function parseTfsPrInvocation(args: readonly string[]): TfsPrInvocation {
   let target: string | undefined;
   let project: string | undefined;
   let repository: string | undefined;
+  let includeAllComments = false;
 
   for (let index = 0; index < ownedArgs.length; index += 1) {
     const token = ownedArgs[index]!;
@@ -181,6 +185,10 @@ export function parseTfsPrInvocation(args: readonly string[]): TfsPrInvocation {
       repository = takeValue("--repo");
       continue;
     }
+    if (token === "--all-comments") {
+      includeAllComments = true;
+      continue;
+    }
     if (token.startsWith("-")) {
       throw invocationError(`Unknown pr-review option: ${token}`);
     }
@@ -203,6 +211,7 @@ export function parseTfsPrInvocation(args: readonly string[]): TfsPrInvocation {
     project,
     repository,
     patchArgs: Object.freeze([...patchArgs]),
+    includeAllComments,
     help: false,
   };
 }
