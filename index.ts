@@ -263,7 +263,7 @@ export function createHunkTfsExtension(
         );
       }
 
-      const [changes, threads] = await Promise.all([
+      const [changes, fetchedThreads] = await Promise.all([
         fetchPullRequestChanges(
           connection,
           target,
@@ -274,6 +274,9 @@ export function createHunkTfsExtension(
         ),
         fetchPullRequestThreads(connection, target, ctx.signal, runtime.fetchImpl),
       ]);
+      const threads = invocation.includeAllComments
+        ? fetchedThreads
+        : fetchedThreads.filter((thread) => thread.status === "active");
 
       if (ctx.signal.aborted) {
         throw new HunkExtensionUserError("TFS pull-request loading was cancelled.");
@@ -392,7 +395,7 @@ export function createHunkTfsExtension(
       {
         name: "pr-review",
         summary: "Review a TFS / Azure DevOps Server pull request (hunk-tfs)",
-        usage: "[url|project/repo#id|id] [--project <name>] [--repo <name>]",
+        usage: "[url|project/repo#id|id] [--project <name>] [--repo <name>] [--all-comments]",
       },
       handler,
     );
@@ -400,7 +403,7 @@ export function createHunkTfsExtension(
       {
         name: "tfs",
         summary: "Compatibility alias for `hunk pr-review`",
-        usage: "[url|project/repo#id|id] [--project <name>] [--repo <name>]",
+        usage: "[url|project/repo#id|id] [--project <name>] [--repo <name>] [--all-comments]",
       },
       handler,
     );

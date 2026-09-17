@@ -50,6 +50,9 @@ hunk pr-review '#94655'
 hunk pr-review 'MyProject/my-repo#94655'
 hunk pr-review 'http://host:8080/tfs/DefaultCollection/MyProject/_git/my-repo/pullrequest/94655?_a=files&path=%2FREADME.md'
 
+# Include non-active comment threads (active threads are loaded by default)
+hunk pr-review 94655 --all-comments
+
 # Auto-discover and pass an option through to the review UI
 hunk pr-review -- --pager
 
@@ -61,7 +64,7 @@ hunk tfs
 Synopsis:
 
 ```text
-hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [-- <review-options...>]
+hunk pr-review [url|project/repo#id|id] [--project <name>] [--repo <name>] [--all-comments] [-- <review-options...>]
 ```
 
 When the command runs inside a Git work tree, the review session is bound to that
@@ -74,6 +77,8 @@ The command must run inside a Git work tree. It chooses the current branch's ups
 Supported remotes are HTTP(S) URLs shaped as `{collection}/{project}/_git/{repository}`; SSH remotes and embedded passwords are rejected. The extension fetches active repository PRs, including drafts, and prefers PRs whose source matches the current upstream branch (or local branch). With no match or detached HEAD it considers all active PRs. One candidate is automatic; multiple candidates use the same chooser, newest first.
 
 ### Review UI
+
+Only active comment threads are loaded by default. Pass `--all-comments` to include all non-active threads too.
 
 - Every non-system, non-deleted positioned comment is stacked as its own annotation at the thread range.
 - The **hunk-tfs** pane shows complete threads; `j`/`k` move and Enter jumps to a positioned thread.
